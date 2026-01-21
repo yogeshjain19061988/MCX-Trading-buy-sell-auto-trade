@@ -1,0 +1,20 @@
+# Chandelier Exit Trading Tool Settings
+# Zerodha API Configuration
+api_key: "your_api_key_here"
+api_secret: "your_api_secret_here"
+
+# Default Application Settings
+default_symbol: "RELIANCE"
+default_exchange: "NSE"
+default_period: "day"
+
+# Indicator Defaults
+default_length: 22
+default_multiplier: 3.0
+use_close: true
+show_labels: true
+highlight_state: true
+await_confirmation: true
+
+# GUI Settings
+theme: "DarkBlue3"

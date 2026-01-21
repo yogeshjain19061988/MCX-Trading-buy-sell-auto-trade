@@ -1,0 +1,13 @@
+# Zerodha Auto-Login Settings
+# Enter your Zerodha API credentials below
+
+api_key: ""
+api_secret: ""
+user_id: ""
+password: ""
+pin: ""
+redirect_url: "http://localhost:8000/"
+login_method: "api"
+auto_login: false
+save_credentials: false
+theme: "DarkBlue3"
