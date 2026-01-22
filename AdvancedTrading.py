@@ -1156,7 +1156,7 @@ class PositionManager:
         self.position_history.append(self.current_position)
         
         # Keep only recent history
-        if len(self.position_history) > self.max_positions:
+        if len (self.position_history) > self.max_positions:
             self.position_history = self.position_history[-self.max_positions:]
         
         logger.info(f"Closed position: {exit_reason}, P&L: {self.current_position.calculate_pnl():.2f}")
@@ -1547,6 +1547,12 @@ class AdvancedTradingDashboard(QMainWindow):
         self.start_btn.setEnabled(False)
         self.start_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 10px;")
         
+        # TIME FRAME BUTTON - NEW ADDITION
+        self.time_frame_btn = QPushButton("Time Frame: 1 min")
+        self.time_frame_btn.clicked.connect(self.toggle_time_frame)
+        self.time_frame_btn.setStyleSheet("background-color: #607D8B; color: white; padding: 10px;")
+        self.time_frame_btn.setToolTip("Select data refresh time frame")
+        
         self.auto_entry_btn = QPushButton("Auto Entry: OFF")
         self.auto_entry_btn.clicked.connect(self.toggle_auto_entry)
         self.auto_entry_btn.setStyleSheet("background-color: #FF9800; color: black; padding: 10px;")
@@ -1577,6 +1583,7 @@ class AdvancedTradingDashboard(QMainWindow):
         control_layout.addWidget(self.connect_btn)
         control_layout.addWidget(self.disconnect_btn)
         control_layout.addWidget(self.start_btn)
+        control_layout.addWidget(self.time_frame_btn)  # NEW ADDITION
         control_layout.addWidget(self.auto_entry_btn)
         control_layout.addWidget(self.auto_exit_btn)
         control_layout.addWidget(self.buy_spread_btn)
@@ -1618,6 +1625,16 @@ class AdvancedTradingDashboard(QMainWindow):
         self.spread_mean_label = QLabel("0.00")
         stats_layout.addWidget(self.spread_mean_label, 2, 3)
         
+        # Time Frame Statistics - NEW ADDITION
+        stats_layout.addWidget(QLabel("Time Frame:"), 3, 0)
+        self.time_frame_info_label = QLabel("1 minute")
+        self.time_frame_info_label.setStyleSheet("font-weight: bold; color: #2196F3;")
+        stats_layout.addWidget(self.time_frame_info_label, 3, 1)
+        
+        stats_layout.addWidget(QLabel("Data Points:"), 3, 2)
+        self.data_points_label = QLabel("0")
+        stats_layout.addWidget(self.data_points_label, 3, 3)
+        
         stats_group.setLayout(stats_layout)
         main_layout.addWidget(stats_group)
         
@@ -1655,6 +1672,11 @@ class AdvancedTradingDashboard(QMainWindow):
         # Initialize UI state
         self.update_auto_entry_button()
         self.update_auto_exit_button()
+	
+	# Time frame tracking
+        self.current_time_frame = 1  # minutes
+        self.time_frame_options = [1, 3, 5, 10]  # minutes
+        self.data_points_by_time_frame = {}  # Track data points per time frame
     
     def simple_token_update(self):
         """Quick token update"""
@@ -2037,8 +2059,62 @@ class AdvancedTradingDashboard(QMainWindow):
     #         logger.error(f"Error handling tick data: {e}")
     #         # Log the error but don't crash
     
+
+
+    def toggle_time_frame(self):
+        """Toggle between different time frames"""
+        try:
+            # Get current index
+            current_index = self.time_frame_options.index(self.current_time_frame)
+            
+            # Move to next time frame (wrap around)
+            next_index = (current_index + 1) % len(self.time_frame_options)
+            new_time_frame = self.time_frame_options[next_index]
+            
+            # Update
+            self.set_time_frame(new_time_frame)
+            
+        except Exception as e:
+            logger.error(f"Error toggling time frame: {e}")
+            self.log_message(f"Error changing time frame: {e}")
+    
+    def set_time_frame(self, minutes: int):
+        """Set specific time frame"""
+        try:
+            if minutes not in self.time_frame_options:
+                logger.warning(f"Invalid time frame: {minutes}. Using default 1 min.")
+                minutes = 1
+            
+            self.current_time_frame = minutes
+            
+            # Update button text
+            self.time_frame_btn.setText(f"Time Frame: {minutes} min")
+            
+            # Update info label
+            self.time_frame_info_label.setText(f"{minutes} minute(s)")
+            
+            # Update data refresh interval in config if needed
+            self.config.data_refresh_interval = minutes * 60 * 1000  # Convert to milliseconds
+            self.config.save()
+            
+            # Reset data points tracking for this time frame
+            self.data_points_by_time_frame[minutes] = 0
+            
+            self.log_message(f"Time frame changed to {minutes} minute(s)")
+            
+            # If monitoring is active, restart with new time frame
+            if self.is_monitoring:
+                self.log_message(f"Restarting data stream with {minutes} minute time frame...")
+                self.stop_trading()
+                QTimer.singleShot(1000, self.start_trading)
+                
+        except Exception as e:
+            logger.error(f"Error setting time frame: {e}")
+            self.log_message(f"Error setting time frame: {e}")
+
+
     def handle_tick_data(self, tick_data):
-        """Handle incoming tick data"""
+        """Handle incoming tick data with time frame tracking"""
         try:
             contract_type = tick_data['contract']
             
@@ -2075,9 +2151,23 @@ class AdvancedTradingDashboard(QMainWindow):
                 self.spread_label.setText(f"{spread:.2f}")
                 
                 # Update spread history
-                self.spread_history.append(spread)
-                if len(self.spread_history) > self.max_spread_history:
-                    self.spread_history = self.spread_history[-self.max_spread_history:]
+                timestamp = datetime.now()
+                self.spread_history.append({'timestamp': timestamp, 'spread': spread})
+                
+                # Filter spread history based on current time frame
+                cutoff_time = timestamp - timedelta(minutes=self.current_time_frame)
+                recent_spreads = [s['spread'] for s in self.spread_history 
+                                 if s['timestamp'] >= cutoff_time]
+                
+                # Update data points counter
+                data_points = len(recent_spreads)
+                self.data_points_by_time_frame[self.current_time_frame] = data_points
+                self.data_points_label.setText(str(data_points))
+                
+                # Trim history to keep only last 24 hours to prevent memory issues
+                day_ago = timestamp - timedelta(hours=24)
+                self.spread_history = [s for s in self.spread_history 
+                                      if s['timestamp'] >= day_ago]
                 
                 # Update position if open
                 if self.position_manager.current_position and self.position_manager.current_position.is_open:
@@ -2093,8 +2183,11 @@ class AdvancedTradingDashboard(QMainWindow):
                     else:
                         self.update_position_display()
                 
-                # Calculate trading signal
-                signal, stats = self.calculate_signal(spread)
+                # Calculate trading signal based on time frame filtered data
+                # FIX: Pass spread directly instead of recent_spreads if calculate_signal expects float
+                signal, stats = self.calculate_signal(recent_spreads)  # Changed from recent_spreads
+                
+                # Update signal display
                 self.update_signal_display(signal, stats)
                 
                 # Check for trading signals (auto entry)
@@ -2108,6 +2201,7 @@ class AdvancedTradingDashboard(QMainWindow):
             
         except Exception as e:
             logger.error(f"Error handling tick data: {e}")
+
 
     def update_auto_exit_button(self):
         """Update auto exit button display"""
@@ -2384,7 +2478,7 @@ class AdvancedTradingDashboard(QMainWindow):
             self.stop_trading()
     
     def start_trading(self):
-        """Start trading"""
+        """Start trading with current time frame"""
         try:
             # Check if we have contracts selected
             if not self.config.near_contract_token or not self.config.mid_contract_token:
@@ -2396,6 +2490,9 @@ class AdvancedTradingDashboard(QMainWindow):
                 self.log_message("Cannot start trading: Not connected to Zerodha")
                 return
             
+            # Log time frame info
+            self.log_message(f"Starting trading with {self.current_time_frame} minute time frame")
+            
             # Start market data
             if self.market_data.start_websocket():
                 self.is_monitoring = True
@@ -2406,7 +2503,7 @@ class AdvancedTradingDashboard(QMainWindow):
                 # Enable trading buttons after a delay to ensure connection
                 QTimer.singleShot(3000, lambda: self._enable_trading_buttons(True))
                 
-                self.log_message("Trading started")
+                self.log_message(f"Trading started (Time Frame: {self.current_time_frame} min)")
             else:
                 self.log_message("Failed to start market data stream")
                 self.is_monitoring = False
@@ -2478,91 +2575,32 @@ class AdvancedTradingDashboard(QMainWindow):
             self.auto_exit_btn.setText("Auto Exit: OFF")
             self.auto_exit_btn.setStyleSheet("background-color: #FF9800; color: black; padding: 10px;")
     
-    def handle_tick_data(self, tick_data):
-        """Handle incoming tick data"""
-        try:
-            contract_type = tick_data['contract']
-            
-            # Update market data display
-            if contract_type == 'near':
-                self.near_price_label.setText(f"{tick_data['last_price']:.2f}")
-                self.near_bid_label.setText(f"{tick_data['best_bid']:.2f}")
-                self.near_ask_label.setText(f"{tick_data['best_ask']:.2f}")
-            else:
-                self.mid_price_label.setText(f"{tick_data['last_price']:.2f}")
-                self.mid_bid_label.setText(f"{tick_data['best_bid']:.2f}")
-                self.mid_ask_label.setText(f"{tick_data['best_ask']:.2f}")
-            
-            # Calculate spread when we have both prices
-            near_summary = self.market_data.get_market_summary('near')
-            mid_summary = self.market_data.get_market_summary('mid')
-            
-            if near_summary and mid_summary and near_summary.get('last_price', 0) > 0 and mid_summary.get('last_price', 0) > 0:
-                near_price = near_summary['last_price']
-                mid_price = mid_summary['last_price']
-                spread = near_price - mid_price
-                
-                # Update spread display
-                self.spread_label.setText(f"{spread:.2f}")
-                
-                # Update spread history for signal calculation
-                self.spread_history.append(spread)
-                if len(self.spread_history) > self.max_spread_history:
-                    self.spread_history = self.spread_history[-self.max_spread_history:]
-                
-                # Calculate bid-ask spread
-                near_bid_ask = near_summary.get('bid_ask_spread', 0)
-                mid_bid_ask = mid_summary.get('bid_ask_spread', 0)
-                total_bid_ask = near_bid_ask + mid_bid_ask
-                
-                self.bid_ask_spread_label.setText(f"{total_bid_ask:.2f}")
-                
-                # Update volume
-                total_volume = near_summary.get('volume', 0) + mid_summary.get('volume', 0)
-                self.volume_label.setText(f"{total_volume:,}")
-                
-                # Update position if open
-                if self.position_manager.current_position and self.position_manager.current_position.is_open:
-                    exit_reason = self.position_manager.update_position(spread, near_price, mid_price)
-                    
-                    if exit_reason and self.config.auto_exit_enabled:
-                        self.close_position(exit_reason)
-                    else:
-                        self.update_position_display()
-                
-                # Calculate trading signal
-                signal, stats = self.calculate_signal(spread)
-                
-                # Update signal display
-                self.update_signal_display(signal, stats)
-                
-                # Check for trading signals (auto entry)
-                if (self.config.auto_entry_enabled and 
-                    not (self.position_manager.current_position and 
-                         self.position_manager.current_position.is_open) and
-                    signal != "NEUTRAL"):
-                    
-                    self.log_message(f"Auto entry signal: {signal}")
-                    
-                    # Check if we should auto enter
-                    if self.should_auto_enter(signal, spread, stats):
-                        self.place_trade(signal, auto=True)
-            
-        except Exception as e:
-            self.log_message(f"Error handling tick data: {e}")
     
-    def calculate_signal(self, spread: float):
+    def calculate_signal(self, spread_data):
         """Calculate trading signal based on spread history"""
-        if len(self.spread_history) < 20:  # Need minimum data
-            return "NEUTRAL", {'zscore': 0, 'mean': 0, 'std': 0}
-    
         try:
+            # Handle both single float and list inputs
+            if isinstance(spread_data, (int, float)):
+                # Single spread value - use full history
+                if len(self.spread_history) < 20:  # Need minimum data
+                    return "NEUTRAL", {'zscore': 0, 'mean': 0, 'std': 0}
+                spread_values = [s['spread'] for s in self.spread_history]
+                current_spread = spread_data
+            elif isinstance(spread_data, list) and len(spread_data) > 0:
+                # List of spread values
+                if len(spread_data) < 20:  # Need minimum data for current time frame
+                    return "NEUTRAL", {'zscore': 0, 'mean': 0, 'std': 0}
+                spread_values = spread_data
+                current_spread = spread_data[-1]  # Use last spread value
+            else:
+                return "NEUTRAL", {'zscore': 0, 'mean': 0, 'std': 0}
+            
             # Calculate statistics
-            spread_mean = np.mean(self.spread_history)
-            spread_std = np.std(self.spread_history)
+            spread_mean = np.mean(spread_values)
+            spread_std = np.std(spread_values)
             
             if spread_std > 0:
-                z_score = (spread - spread_mean) / spread_std
+                z_score = (current_spread - spread_mean) / spread_std
                 
                 # Update statistics display using QTimer
                 QTimer.singleShot(0, lambda: self.zscore_label.setText(f"{z_score:.2f}"))
@@ -2588,6 +2626,7 @@ class AdvancedTradingDashboard(QMainWindow):
             self.log_message(f"Error calculating signal: {e}")
     
         return "NEUTRAL", {'zscore': 0, 'mean': 0, 'std': 0}
+
     
     def update_signal_display(self, signal: str, stats: dict):
         """Update signal display based on signal"""
@@ -2632,7 +2671,9 @@ class AdvancedTradingDashboard(QMainWindow):
         # Add confirmation logic here
         # For example, require minimum spread history, check volatility, etc.
         
-        if len(self.spread_history) < 50:  # Require more history
+        data_points = self.data_points_by_time_frame.get(self.current_time_frame, 0)
+        
+        if data_points < 50:  # Require more history for current time frame
             return False
         
         # Check if z-score is beyond threshold
